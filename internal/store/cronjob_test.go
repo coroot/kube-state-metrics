@@ -23,6 +23,7 @@ import (
 	"time"
 
 	batchv1 "k8s.io/api/batch/v1"
+	batchv1beta1 "k8s.io/api/batch/v1beta1"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
@@ -504,4 +505,164 @@ func TestGetNextScheduledTime(t *testing.T) {
 		}
 	}
 
+}
+
+func TestCronJobStoreV1beta1(t *testing.T) {
+	// Test that v1beta1 CronJob objects are correctly converted to metrics
+	// Note: v1beta1 does not have TimeZone and LastSuccessfulTime fields
+
+	ActiveRunningCronJob1NextScheduleTime := calculateNextSchedule6h(ActiveRunningCronJob1LastScheduleTime, "Local")
+
+	cases := []generateMetricsTestCase{
+		{
+			AllowAnnotationsList: []string{
+				"app.k8s.io/owner",
+			},
+			Obj: &batchv1beta1.CronJob{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:            "ActiveRunningCronJobV1beta1",
+					Namespace:       "ns1",
+					Generation:      1,
+					ResourceVersion: "11111",
+					Labels: map[string]string{
+						"app": "example-active-running-v1beta1",
+					},
+					Annotations: map[string]string{
+						"app":              "mysql-server",
+						"app.k8s.io/owner": "@foo",
+					},
+				},
+				Status: batchv1beta1.CronJobStatus{
+					Active:           []v1.ObjectReference{{Name: "FakeJob1"}, {Name: "FakeJob2"}},
+					LastScheduleTime: &metav1.Time{Time: ActiveRunningCronJob1LastScheduleTime},
+				},
+				Spec: batchv1beta1.CronJobSpec{
+					StartingDeadlineSeconds:    &StartingDeadlineSeconds300,
+					ConcurrencyPolicy:          "Forbid",
+					Suspend:                    &SuspendFalse,
+					Schedule:                   "0 */6 * * *",
+					SuccessfulJobsHistoryLimit: &SuccessfulJobHistoryLimit3,
+					FailedJobsHistoryLimit:     &FailedJobHistoryLimit1,
+				},
+			},
+			Want: `
+				# HELP kube_cronjob_created [STABLE] Unix creation timestamp
+				# HELP kube_cronjob_info [STABLE] Info about cronjob.
+				# HELP kube_cronjob_annotations Kubernetes annotations converted to Prometheus labels.
+				# HELP kube_cronjob_labels [STABLE] Kubernetes labels converted to Prometheus labels.
+				# HELP kube_cronjob_next_schedule_time [STABLE] Next time the cronjob should be scheduled. The time after lastScheduleTime, or after the cron job's creation time if it's never been scheduled. Use this to determine if the job is delayed.
+				# HELP kube_cronjob_spec_failed_job_history_limit Failed job history limit tells the controller how many failed jobs should be preserved.
+				# HELP kube_cronjob_spec_starting_deadline_seconds [STABLE] Deadline in seconds for starting the job if it misses scheduled time for any reason.
+        		# HELP kube_cronjob_spec_successful_job_history_limit Successful job history limit tells the controller how many completed jobs should be preserved.
+				# HELP kube_cronjob_spec_suspend [STABLE] Suspend flag tells the controller to suspend subsequent executions.
+				# HELP kube_cronjob_status_active [STABLE] Active holds pointers to currently running jobs.
+                # HELP kube_cronjob_metadata_resource_version [STABLE] Resource version representing a specific version of the cronjob.
+				# HELP kube_cronjob_status_last_schedule_time [STABLE] LastScheduleTime keeps information of when was the last time the job was successfully scheduled.
+				# HELP kube_cronjob_status_last_successful_time [STABLE] LastSuccessfulTime keeps information of when was the last time the job was completed successfully.
+				# TYPE kube_cronjob_created gauge
+				# TYPE kube_cronjob_info gauge
+				# TYPE kube_cronjob_annotations gauge
+				# TYPE kube_cronjob_labels gauge
+				# TYPE kube_cronjob_next_schedule_time gauge
+				# TYPE kube_cronjob_spec_failed_job_history_limit gauge
+				# TYPE kube_cronjob_spec_starting_deadline_seconds gauge
+				# TYPE kube_cronjob_spec_successful_job_history_limit gauge
+				# TYPE kube_cronjob_spec_suspend gauge
+				# TYPE kube_cronjob_status_active gauge
+                # TYPE kube_cronjob_metadata_resource_version gauge
+				# TYPE kube_cronjob_status_last_schedule_time gauge
+				# TYPE kube_cronjob_status_last_successful_time gauge
+				kube_cronjob_info{concurrency_policy="Forbid",cronjob="ActiveRunningCronJobV1beta1",namespace="ns1",schedule="0 */6 * * *",timezone="local"} 1
+				kube_cronjob_annotations{annotation_app_k8s_io_owner="@foo",cronjob="ActiveRunningCronJobV1beta1",namespace="ns1"} 1
+				kube_cronjob_spec_failed_job_history_limit{cronjob="ActiveRunningCronJobV1beta1",namespace="ns1"} 1
+				kube_cronjob_spec_starting_deadline_seconds{cronjob="ActiveRunningCronJobV1beta1",namespace="ns1"} 300
+				kube_cronjob_spec_successful_job_history_limit{cronjob="ActiveRunningCronJobV1beta1",namespace="ns1"} 3
+				kube_cronjob_spec_suspend{cronjob="ActiveRunningCronJobV1beta1",namespace="ns1"} 0
+				kube_cronjob_status_active{cronjob="ActiveRunningCronJobV1beta1",namespace="ns1"} 2
+                kube_cronjob_metadata_resource_version{cronjob="ActiveRunningCronJobV1beta1",namespace="ns1"} 11111
+				kube_cronjob_status_last_schedule_time{cronjob="ActiveRunningCronJobV1beta1",namespace="ns1"} 1.520742896e+09
+` + fmt.Sprintf("kube_cronjob_next_schedule_time{cronjob=\"ActiveRunningCronJobV1beta1\",namespace=\"ns1\"} %ve+09\n",
+				float64(ActiveRunningCronJob1NextScheduleTime.Unix())/math.Pow10(9)),
+			MetricNames: []string{
+				"kube_cronjob_next_schedule_time",
+				"kube_cronjob_spec_starting_deadline_seconds",
+				"kube_cronjob_status_active",
+				"kube_cronjob_metadata_resource_version",
+				"kube_cronjob_spec_suspend",
+				"kube_cronjob_info",
+				"kube_cronjob_created",
+				"kube_cronjob_annotations",
+				"kube_cronjob_labels",
+				"kube_cronjob_status_last_schedule_time",
+				"kube_cronjob_status_last_successful_time",
+				"kube_cronjob_spec_successful_job_history_limit",
+				"kube_cronjob_spec_failed_job_history_limit",
+			},
+		},
+		{
+			Obj: &batchv1beta1.CronJob{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:            "SuspendedCronJobV1beta1",
+					Namespace:       "ns1",
+					Generation:      1,
+					ResourceVersion: "22222",
+					Labels: map[string]string{
+						"app": "example-suspended-v1beta1",
+					},
+				},
+				Status: batchv1beta1.CronJobStatus{
+					Active:           []v1.ObjectReference{},
+					LastScheduleTime: &metav1.Time{Time: SuspendedCronJob1LastScheduleTime},
+				},
+				Spec: batchv1beta1.CronJobSpec{
+					StartingDeadlineSeconds:    &StartingDeadlineSeconds300,
+					ConcurrencyPolicy:          "Forbid",
+					Suspend:                    &SuspendTrue,
+					Schedule:                   "0 */3 * * *",
+					SuccessfulJobsHistoryLimit: &SuccessfulJobHistoryLimit3,
+					FailedJobsHistoryLimit:     &FailedJobHistoryLimit1,
+				},
+			},
+			Want: `
+				# HELP kube_cronjob_created [STABLE] Unix creation timestamp
+				# HELP kube_cronjob_info [STABLE] Info about cronjob.
+				# HELP kube_cronjob_labels [STABLE] Kubernetes labels converted to Prometheus labels.
+				# HELP kube_cronjob_spec_failed_job_history_limit Failed job history limit tells the controller how many failed jobs should be preserved.
+				# HELP kube_cronjob_spec_starting_deadline_seconds [STABLE] Deadline in seconds for starting the job if it misses scheduled time for any reason.
+				# HELP kube_cronjob_spec_successful_job_history_limit Successful job history limit tells the controller how many completed jobs should be preserved.
+				# HELP kube_cronjob_spec_suspend [STABLE] Suspend flag tells the controller to suspend subsequent executions.
+				# HELP kube_cronjob_status_active [STABLE] Active holds pointers to currently running jobs.
+                # HELP kube_cronjob_metadata_resource_version [STABLE] Resource version representing a specific version of the cronjob.
+				# HELP kube_cronjob_status_last_schedule_time [STABLE] LastScheduleTime keeps information of when was the last time the job was successfully scheduled.
+				# HELP kube_cronjob_status_last_successful_time [STABLE] LastSuccessfulTime keeps information of when was the last time the job was completed successfully.
+				# TYPE kube_cronjob_created gauge
+				# TYPE kube_cronjob_info gauge
+				# TYPE kube_cronjob_labels gauge
+				# TYPE kube_cronjob_spec_failed_job_history_limit gauge
+				# TYPE kube_cronjob_spec_starting_deadline_seconds gauge
+				# TYPE kube_cronjob_spec_successful_job_history_limit gauge
+				# TYPE kube_cronjob_spec_suspend gauge
+				# TYPE kube_cronjob_status_active gauge
+                # TYPE kube_cronjob_metadata_resource_version gauge
+				# TYPE kube_cronjob_status_last_schedule_time gauge
+				# TYPE kube_cronjob_status_last_successful_time gauge
+				kube_cronjob_info{concurrency_policy="Forbid",cronjob="SuspendedCronJobV1beta1",namespace="ns1",schedule="0 */3 * * *",timezone="local"} 1
+				kube_cronjob_spec_failed_job_history_limit{cronjob="SuspendedCronJobV1beta1",namespace="ns1"} 1
+				kube_cronjob_spec_starting_deadline_seconds{cronjob="SuspendedCronJobV1beta1",namespace="ns1"} 300
+				kube_cronjob_spec_successful_job_history_limit{cronjob="SuspendedCronJobV1beta1",namespace="ns1"} 3
+				kube_cronjob_spec_suspend{cronjob="SuspendedCronJobV1beta1",namespace="ns1"} 1
+				kube_cronjob_status_active{cronjob="SuspendedCronJobV1beta1",namespace="ns1"} 0
+				kube_cronjob_metadata_resource_version{cronjob="SuspendedCronJobV1beta1",namespace="ns1"} 22222
+				kube_cronjob_status_last_schedule_time{cronjob="SuspendedCronJobV1beta1",namespace="ns1"} 1.520762696e+09
+`,
+			MetricNames: []string{"kube_cronjob_status_last_successful_time", "kube_cronjob_spec_starting_deadline_seconds", "kube_cronjob_status_active", "kube_cronjob_metadata_resource_version", "kube_cronjob_spec_suspend", "kube_cronjob_info", "kube_cronjob_created", "kube_cronjob_labels", "kube_cronjob_status_last_schedule_time", "kube_cronjob_spec_successful_job_history_limit", "kube_cronjob_spec_failed_job_history_limit"},
+		},
+	}
+	for i, c := range cases {
+		c.Func = generator.ComposeMetricGenFuncs(cronJobMetricFamilies(c.AllowAnnotationsList, c.AllowLabelsList))
+		c.Headers = generator.ExtractMetricFamilyHeaders(cronJobMetricFamilies(c.AllowAnnotationsList, c.AllowLabelsList))
+		if err := c.run(); err != nil {
+			t.Errorf("unexpected collecting result in %vth run:\n%s", i, err)
+		}
+	}
 }

@@ -24,6 +24,8 @@ import (
 
 	"github.com/robfig/cron/v3"
 	batchv1 "k8s.io/api/batch/v1"
+	batchv1beta1 "k8s.io/api/batch/v1beta1"
+	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/watch"
@@ -43,6 +45,66 @@ var (
 	descCronJobLabelsDefaultLabels = []string{"namespace", "cronjob"}
 )
 
+// cronJobWrapper provides a unified interface for both v1 and v1beta1 CronJob objects.
+type cronJobWrapper struct {
+	Name                       string
+	Namespace                  string
+	Labels                     map[string]string
+	Annotations                map[string]string
+	CreationTimestamp          metav1.Time
+	ResourceVersion            string
+	Schedule                   string
+	ConcurrencyPolicy          string
+	Suspend                    *bool
+	StartingDeadlineSeconds    *int64
+	SuccessfulJobsHistoryLimit *int32
+	FailedJobsHistoryLimit     *int32
+	TimeZone                   *string
+	Active                     []v1.ObjectReference
+	LastScheduleTime           *metav1.Time
+	LastSuccessfulTime         *metav1.Time
+}
+
+func cronJobWrapperFromV1(cj *batchv1.CronJob) *cronJobWrapper {
+	return &cronJobWrapper{
+		Name:                       cj.Name,
+		Namespace:                  cj.Namespace,
+		Labels:                     cj.Labels,
+		Annotations:                cj.Annotations,
+		CreationTimestamp:          cj.CreationTimestamp,
+		ResourceVersion:            cj.ResourceVersion,
+		Schedule:                   cj.Spec.Schedule,
+		ConcurrencyPolicy:          string(cj.Spec.ConcurrencyPolicy),
+		Suspend:                    cj.Spec.Suspend,
+		StartingDeadlineSeconds:    cj.Spec.StartingDeadlineSeconds,
+		SuccessfulJobsHistoryLimit: cj.Spec.SuccessfulJobsHistoryLimit,
+		FailedJobsHistoryLimit:     cj.Spec.FailedJobsHistoryLimit,
+		TimeZone:                   cj.Spec.TimeZone,
+		Active:                     cj.Status.Active,
+		LastScheduleTime:           cj.Status.LastScheduleTime,
+		LastSuccessfulTime:         cj.Status.LastSuccessfulTime,
+	}
+}
+
+func cronJobWrapperFromV1beta1(cj *batchv1beta1.CronJob) *cronJobWrapper {
+	return &cronJobWrapper{
+		Name:                       cj.Name,
+		Namespace:                  cj.Namespace,
+		Labels:                     cj.Labels,
+		Annotations:                cj.Annotations,
+		CreationTimestamp:          cj.CreationTimestamp,
+		ResourceVersion:            cj.ResourceVersion,
+		Schedule:                   cj.Spec.Schedule,
+		ConcurrencyPolicy:          string(cj.Spec.ConcurrencyPolicy),
+		Suspend:                    cj.Spec.Suspend,
+		StartingDeadlineSeconds:    cj.Spec.StartingDeadlineSeconds,
+		SuccessfulJobsHistoryLimit: cj.Spec.SuccessfulJobsHistoryLimit,
+		FailedJobsHistoryLimit:     cj.Spec.FailedJobsHistoryLimit,
+		Active:                     cj.Status.Active,
+		LastScheduleTime:           cj.Status.LastScheduleTime,
+	}
+}
+
 func cronJobMetricFamilies(allowAnnotationsList, allowLabelsList []string) []generator.FamilyGenerator {
 	return []generator.FamilyGenerator{
 		*generator.NewFamilyGeneratorWithStability(
@@ -51,7 +113,7 @@ func cronJobMetricFamilies(allowAnnotationsList, allowLabelsList []string) []gen
 			metric.Gauge,
 			basemetrics.ALPHA,
 			"",
-			wrapCronJobFunc(func(j *batchv1.CronJob) *metric.Family {
+			wrapCronJobFunc(func(j *cronJobWrapper) *metric.Family {
 				if len(allowAnnotationsList) == 0 {
 					return &metric.Family{}
 				}
@@ -73,7 +135,7 @@ func cronJobMetricFamilies(allowAnnotationsList, allowLabelsList []string) []gen
 			metric.Gauge,
 			basemetrics.STABLE,
 			"",
-			wrapCronJobFunc(func(j *batchv1.CronJob) *metric.Family {
+			wrapCronJobFunc(func(j *cronJobWrapper) *metric.Family {
 				if len(allowLabelsList) == 0 {
 					return &metric.Family{}
 				}
@@ -95,16 +157,16 @@ func cronJobMetricFamilies(allowAnnotationsList, allowLabelsList []string) []gen
 			metric.Gauge,
 			basemetrics.STABLE,
 			"",
-			wrapCronJobFunc(func(j *batchv1.CronJob) *metric.Family {
+			wrapCronJobFunc(func(j *cronJobWrapper) *metric.Family {
 				timeZone := "local"
-				if j.Spec.TimeZone != nil {
-					timeZone = *j.Spec.TimeZone
+				if j.TimeZone != nil {
+					timeZone = *j.TimeZone
 				}
 				return &metric.Family{
 					Metrics: []*metric.Metric{
 						{
 							LabelKeys:   []string{"schedule", "concurrency_policy", "timezone"},
-							LabelValues: []string{j.Spec.Schedule, string(j.Spec.ConcurrencyPolicy), timeZone},
+							LabelValues: []string{j.Schedule, j.ConcurrencyPolicy, timeZone},
 							Value:       1,
 						},
 					},
@@ -117,7 +179,7 @@ func cronJobMetricFamilies(allowAnnotationsList, allowLabelsList []string) []gen
 			metric.Gauge,
 			basemetrics.STABLE,
 			"",
-			wrapCronJobFunc(func(j *batchv1.CronJob) *metric.Family {
+			wrapCronJobFunc(func(j *cronJobWrapper) *metric.Family {
 				ms := []*metric.Metric{}
 				if !j.CreationTimestamp.IsZero() {
 					ms = append(ms, &metric.Metric{
@@ -138,13 +200,13 @@ func cronJobMetricFamilies(allowAnnotationsList, allowLabelsList []string) []gen
 			metric.Gauge,
 			basemetrics.STABLE,
 			"",
-			wrapCronJobFunc(func(j *batchv1.CronJob) *metric.Family {
+			wrapCronJobFunc(func(j *cronJobWrapper) *metric.Family {
 				return &metric.Family{
 					Metrics: []*metric.Metric{
 						{
 							LabelKeys:   []string{},
 							LabelValues: []string{},
-							Value:       float64(len(j.Status.Active)),
+							Value:       float64(len(j.Active)),
 						},
 					},
 				}
@@ -156,14 +218,14 @@ func cronJobMetricFamilies(allowAnnotationsList, allowLabelsList []string) []gen
 			metric.Gauge,
 			basemetrics.STABLE,
 			"",
-			wrapCronJobFunc(func(j *batchv1.CronJob) *metric.Family {
+			wrapCronJobFunc(func(j *cronJobWrapper) *metric.Family {
 				ms := []*metric.Metric{}
 
-				if j.Status.LastScheduleTime != nil {
+				if j.LastScheduleTime != nil {
 					ms = append(ms, &metric.Metric{
 						LabelKeys:   []string{},
 						LabelValues: []string{},
-						Value:       float64(j.Status.LastScheduleTime.Unix()),
+						Value:       float64(j.LastScheduleTime.Unix()),
 					})
 				}
 
@@ -178,14 +240,14 @@ func cronJobMetricFamilies(allowAnnotationsList, allowLabelsList []string) []gen
 			metric.Gauge,
 			basemetrics.STABLE,
 			"",
-			wrapCronJobFunc(func(j *batchv1.CronJob) *metric.Family {
+			wrapCronJobFunc(func(j *cronJobWrapper) *metric.Family {
 				ms := []*metric.Metric{}
 
-				if j.Status.LastSuccessfulTime != nil {
+				if j.LastSuccessfulTime != nil {
 					ms = append(ms, &metric.Metric{
 						LabelKeys:   []string{},
 						LabelValues: []string{},
-						Value:       float64(j.Status.LastSuccessfulTime.Unix()),
+						Value:       float64(j.LastSuccessfulTime.Unix()),
 					})
 				}
 
@@ -200,14 +262,14 @@ func cronJobMetricFamilies(allowAnnotationsList, allowLabelsList []string) []gen
 			metric.Gauge,
 			basemetrics.STABLE,
 			"",
-			wrapCronJobFunc(func(j *batchv1.CronJob) *metric.Family {
+			wrapCronJobFunc(func(j *cronJobWrapper) *metric.Family {
 				ms := []*metric.Metric{}
 
-				if j.Spec.Suspend != nil {
+				if j.Suspend != nil {
 					ms = append(ms, &metric.Metric{
 						LabelKeys:   []string{},
 						LabelValues: []string{},
-						Value:       boolFloat64(*j.Spec.Suspend),
+						Value:       boolFloat64(*j.Suspend),
 					})
 				}
 
@@ -222,14 +284,14 @@ func cronJobMetricFamilies(allowAnnotationsList, allowLabelsList []string) []gen
 			metric.Gauge,
 			basemetrics.STABLE,
 			"",
-			wrapCronJobFunc(func(j *batchv1.CronJob) *metric.Family {
+			wrapCronJobFunc(func(j *cronJobWrapper) *metric.Family {
 				ms := []*metric.Metric{}
 
-				if j.Spec.StartingDeadlineSeconds != nil {
+				if j.StartingDeadlineSeconds != nil {
 					ms = append(ms, &metric.Metric{
 						LabelKeys:   []string{},
 						LabelValues: []string{},
-						Value:       float64(*j.Spec.StartingDeadlineSeconds),
+						Value:       float64(*j.StartingDeadlineSeconds),
 					})
 
 				}
@@ -245,14 +307,14 @@ func cronJobMetricFamilies(allowAnnotationsList, allowLabelsList []string) []gen
 			metric.Gauge,
 			basemetrics.STABLE,
 			"",
-			wrapCronJobFunc(func(j *batchv1.CronJob) *metric.Family {
+			wrapCronJobFunc(func(j *cronJobWrapper) *metric.Family {
 				ms := []*metric.Metric{}
 
 				// If the cron job is suspended, don't track the next scheduled time
-				nextScheduledTime, err := getNextScheduledTime(j.Spec.Schedule, j.Status.LastScheduleTime, j.CreationTimestamp, j.Spec.TimeZone)
+				nextScheduledTime, err := getNextScheduledTime(j.Schedule, j.LastScheduleTime, j.CreationTimestamp, j.TimeZone)
 				if err != nil {
 					panic(err)
-				} else if !*j.Spec.Suspend {
+				} else if !*j.Suspend {
 					ms = append(ms, &metric.Metric{
 						LabelKeys:   []string{},
 						LabelValues: []string{},
@@ -271,7 +333,7 @@ func cronJobMetricFamilies(allowAnnotationsList, allowLabelsList []string) []gen
 			metric.Gauge,
 			basemetrics.STABLE,
 			"",
-			wrapCronJobFunc(func(j *batchv1.CronJob) *metric.Family {
+			wrapCronJobFunc(func(j *cronJobWrapper) *metric.Family {
 				return &metric.Family{
 					Metrics: resourceVersionMetric(j.ResourceVersion),
 				}
@@ -283,14 +345,14 @@ func cronJobMetricFamilies(allowAnnotationsList, allowLabelsList []string) []gen
 			metric.Gauge,
 			basemetrics.ALPHA,
 			"",
-			wrapCronJobFunc(func(j *batchv1.CronJob) *metric.Family {
+			wrapCronJobFunc(func(j *cronJobWrapper) *metric.Family {
 				ms := []*metric.Metric{}
 
-				if j.Spec.SuccessfulJobsHistoryLimit != nil {
+				if j.SuccessfulJobsHistoryLimit != nil {
 					ms = append(ms, &metric.Metric{
 						LabelKeys:   []string{},
 						LabelValues: []string{},
-						Value:       float64(*j.Spec.SuccessfulJobsHistoryLimit),
+						Value:       float64(*j.SuccessfulJobsHistoryLimit),
 					})
 				}
 
@@ -305,14 +367,14 @@ func cronJobMetricFamilies(allowAnnotationsList, allowLabelsList []string) []gen
 			metric.Gauge,
 			basemetrics.ALPHA,
 			"",
-			wrapCronJobFunc(func(j *batchv1.CronJob) *metric.Family {
+			wrapCronJobFunc(func(j *cronJobWrapper) *metric.Family {
 				ms := []*metric.Metric{}
 
-				if j.Spec.FailedJobsHistoryLimit != nil {
+				if j.FailedJobsHistoryLimit != nil {
 					ms = append(ms, &metric.Metric{
 						LabelKeys:   []string{},
 						LabelValues: []string{},
-						Value:       float64(*j.Spec.FailedJobsHistoryLimit),
+						Value:       float64(*j.FailedJobsHistoryLimit),
 					})
 				}
 
@@ -324,14 +386,22 @@ func cronJobMetricFamilies(allowAnnotationsList, allowLabelsList []string) []gen
 	}
 }
 
-func wrapCronJobFunc(f func(*batchv1.CronJob) *metric.Family) func(interface{}) *metric.Family {
+func wrapCronJobFunc(f func(*cronJobWrapper) *metric.Family) func(interface{}) *metric.Family {
 	return func(obj interface{}) *metric.Family {
-		cronJob := obj.(*batchv1.CronJob)
+		var wrapper *cronJobWrapper
+		switch cj := obj.(type) {
+		case *batchv1.CronJob:
+			wrapper = cronJobWrapperFromV1(cj)
+		case *batchv1beta1.CronJob:
+			wrapper = cronJobWrapperFromV1beta1(cj)
+		default:
+			panic(fmt.Errorf("unexpected type %T", obj))
+		}
 
-		metricFamily := f(cronJob)
+		metricFamily := f(wrapper)
 
 		for _, m := range metricFamily.Metrics {
-			m.LabelKeys, m.LabelValues = mergeKeyValues(descCronJobLabelsDefaultLabels, []string{cronJob.Namespace, cronJob.Name}, m.LabelKeys, m.LabelValues)
+			m.LabelKeys, m.LabelValues = mergeKeyValues(descCronJobLabelsDefaultLabels, []string{wrapper.Namespace, wrapper.Name}, m.LabelKeys, m.LabelValues)
 		}
 
 		return metricFamily
@@ -347,6 +417,19 @@ func createCronJobListWatch(kubeClient clientset.Interface, ns string, fieldSele
 		WatchFunc: func(opts metav1.ListOptions) (watch.Interface, error) {
 			opts.FieldSelector = fieldSelector
 			return kubeClient.BatchV1().CronJobs(ns).Watch(context.TODO(), opts)
+		},
+	}
+}
+
+func createCronJobListWatchV1beta1(kubeClient clientset.Interface, ns string, fieldSelector string) cache.ListerWatcher {
+	return &cache.ListWatch{
+		ListFunc: func(opts metav1.ListOptions) (runtime.Object, error) {
+			opts.FieldSelector = fieldSelector
+			return kubeClient.BatchV1beta1().CronJobs(ns).List(context.TODO(), opts)
+		},
+		WatchFunc: func(opts metav1.ListOptions) (watch.Interface, error) {
+			opts.FieldSelector = fieldSelector
+			return kubeClient.BatchV1beta1().CronJobs(ns).Watch(context.TODO(), opts)
 		},
 	}
 }

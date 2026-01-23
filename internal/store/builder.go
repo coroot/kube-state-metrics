@@ -30,6 +30,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	autoscaling "k8s.io/api/autoscaling/v2"
 	batchv1 "k8s.io/api/batch/v1"
+	batchv1beta1 "k8s.io/api/batch/v1beta1"
 	certv1 "k8s.io/api/certificates/v1"
 	coordinationv1 "k8s.io/api/coordination/v1"
 	v1 "k8s.io/api/core/v1"
@@ -38,6 +39,7 @@ import (
 	policyv1 "k8s.io/api/policy/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	storagev1 "k8s.io/api/storage/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	clientset "k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/cache"
@@ -85,6 +87,8 @@ type Builder struct {
 	shard               int32
 	useAPIServerCache   bool
 	objectLimit         int64
+
+	cronJobAPIVersion string // "v1" or "v1beta1", detected at runtime
 
 	GVKToReflectorStopChanMap *map[string]chan struct{}
 }
@@ -378,7 +382,26 @@ func (b *Builder) buildConfigMapStores() []cache.Store {
 }
 
 func (b *Builder) buildCronJobStores() []cache.Store {
+	if b.cronJobAPIVersion == "" {
+		b.detectCronJobAPIVersion()
+	}
+	if b.cronJobAPIVersion == "v1beta1" {
+		return b.buildStoresFunc(cronJobMetricFamilies(b.allowAnnotationsList["cronjobs"], b.allowLabelsList["cronjobs"]), &batchv1beta1.CronJob{}, createCronJobListWatchV1beta1, b.useAPIServerCache, b.objectLimit)
+	}
 	return b.buildStoresFunc(cronJobMetricFamilies(b.allowAnnotationsList["cronjobs"], b.allowLabelsList["cronjobs"]), &batchv1.CronJob{}, createCronJobListWatch, b.useAPIServerCache, b.objectLimit)
+}
+
+func (b *Builder) detectCronJobAPIVersion() {
+	// Try batch/v1 first (available in K8s 1.21+)
+	_, err := b.kubeClient.BatchV1().CronJobs("").List(context.TODO(), metav1.ListOptions{Limit: 1})
+	if err == nil {
+		b.cronJobAPIVersion = "v1"
+		klog.InfoS("Using CronJob API version", "version", "batch/v1")
+		return
+	}
+	// Fall back to v1beta1 (for K8s 1.16-1.20)
+	b.cronJobAPIVersion = "v1beta1"
+	klog.InfoS("Using CronJob API version", "version", "batch/v1beta1")
 }
 
 func (b *Builder) buildDaemonSetStores() []cache.Store {
