@@ -83,7 +83,7 @@ type Options struct {
 	UseAPIServerCache    bool          `yaml:"use_api_server_cache"`
 	ObjectLimit          int64         `yaml:"object_limit"`
 	AuthFilter           bool          `yaml:"auth_filter"`
-	PodMinAge            time.Duration `yaml:"pod_min_age"`
+	MinAge               time.Duration `yaml:"min_age"`
 }
 
 // GetConfigFile is the getter for --config value.
@@ -149,7 +149,7 @@ func (o *Options) AddFlags(cmd *cobra.Command) {
 	o.cmd.Flags().BoolVarP(&o.Help, "help", "h", false, "Print Help text")
 	o.cmd.Flags().BoolVarP(&o.UseAPIServerCache, "use-apiserver-cache", "", false, "Sets resourceVersion=0 for ListWatch requests, using cached resources from the apiserver instead of an etcd quorum read.")
 	o.cmd.Flags().Int64Var(&o.ObjectLimit, "object-limit", 0, "The total number of objects to list per resource from the API Server. (experimental)")
-	o.cmd.Flags().DurationVar(&o.PodMinAge, "pod-min-age", 0, "Don't emit kube_pod_* metrics for pods younger than this. For terminal pods, the actual run duration is used. Suppresses high-cardinality from short-lived job/cronjob pods. 0 disables.")
+	o.cmd.Flags().DurationVar(&o.MinAge, "min-age", 0, "Don't emit kube_pod_* / kube_job_* metrics for resources younger than this. For terminal-phase resources the actual run duration is used. Suppresses high-cardinality from short-lived job/cronjob workloads. 0 disables.")
 	o.cmd.Flags().Int32Var(&o.Shard, "shard", int32(0), "The instances shard nominal (zero indexed) within the total number of shards. (default 0)")
 	o.cmd.Flags().IntVar(&o.Port, "port", 8080, `Port to expose metrics on.`)
 	o.cmd.Flags().IntVar(&o.TelemetryPort, "telemetry-port", 8081, `Port to expose kube-state-metrics self metrics on.`)

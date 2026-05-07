@@ -87,7 +87,7 @@ type Builder struct {
 	shard               int32
 	useAPIServerCache   bool
 	objectLimit         int64
-	podMinAge           time.Duration
+	minAge              time.Duration
 
 	cronJobAPIVersion string // "v1" or "v1beta1", detected at runtime
 
@@ -180,11 +180,12 @@ func (b *Builder) WithObjectLimit(l int64) {
 	b.objectLimit = l
 }
 
-// WithPodMinAge sets the minimum pod age below which kube_pod_* metrics are suppressed.
-// For terminal-phase pods (Succeeded/Failed) the actual run duration is used instead.
+// WithMinAge sets the minimum resource age below which short-lived workloads
+// (currently pods and jobs) are suppressed from emission. For terminal-phase
+// resources the actual run duration is used instead of age-since-creation.
 // 0 disables the filter.
-func (b *Builder) WithPodMinAge(d time.Duration) {
-	b.podMinAge = d
+func (b *Builder) WithMinAge(d time.Duration) {
+	b.minAge = d
 }
 
 // WithFamilyGeneratorFilter configures the family generator filter which decides which
@@ -437,7 +438,7 @@ func (b *Builder) buildIngressStores() []cache.Store {
 }
 
 func (b *Builder) buildJobStores() []cache.Store {
-	return b.buildStoresFunc(jobMetricFamilies(b.allowAnnotationsList["jobs"], b.allowLabelsList["jobs"]), &batchv1.Job{}, createJobListWatch, b.useAPIServerCache, b.objectLimit)
+	return b.buildStoresFunc(jobMetricFamilies(b.allowAnnotationsList["jobs"], b.allowLabelsList["jobs"], b.minAge), &batchv1.Job{}, createJobListWatch, b.useAPIServerCache, b.objectLimit)
 }
 
 func (b *Builder) buildLimitRangeStores() []cache.Store {
@@ -505,7 +506,7 @@ func (b *Builder) buildStorageClassStores() []cache.Store {
 }
 
 func (b *Builder) buildPodStores() []cache.Store {
-	return b.buildStoresFunc(podMetricFamilies(b.allowAnnotationsList["pods"], b.allowLabelsList["pods"], b.podMinAge), &v1.Pod{}, createPodListWatch, b.useAPIServerCache, b.objectLimit)
+	return b.buildStoresFunc(podMetricFamilies(b.allowAnnotationsList["pods"], b.allowLabelsList["pods"], b.minAge), &v1.Pod{}, createPodListWatch, b.useAPIServerCache, b.objectLimit)
 }
 
 func (b *Builder) buildCsrStores() []cache.Store {

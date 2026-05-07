@@ -259,7 +259,7 @@ func RunKubeStateMetrics(ctx context.Context, opts *options.Options) error {
 
 	storeBuilder.WithUsingAPIServerCache(opts.UseAPIServerCache)
 	storeBuilder.WithObjectLimit(opts.ObjectLimit)
-	storeBuilder.WithPodMinAge(opts.PodMinAge)
+	storeBuilder.WithMinAge(opts.MinAge)
 	storeBuilder.WithGenerateStoresFunc(storeBuilder.DefaultGenerateStoresFunc())
 	proc.StartReaper()
 

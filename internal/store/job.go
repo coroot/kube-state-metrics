@@ -19,6 +19,7 @@ package store
 import (
 	"context"
 	"strconv"
+	"time"
 
 	basemetrics "k8s.io/component-base/metrics"
 
@@ -43,8 +44,8 @@ var (
 	jobFailureReasons          = []string{"BackoffLimitExceeded", "DeadlineExceeded", "Evicted"}
 )
 
-func jobMetricFamilies(allowAnnotationsList, allowLabelsList []string) []generator.FamilyGenerator {
-	return []generator.FamilyGenerator{
+func jobMetricFamilies(allowAnnotationsList, allowLabelsList []string, minAge time.Duration) []generator.FamilyGenerator {
+	families := []generator.FamilyGenerator{
 		*generator.NewFamilyGeneratorWithStability(
 			descJobAnnotationsName,
 			descJobAnnotationsHelp,
@@ -444,6 +445,50 @@ func jobMetricFamilies(allowAnnotationsList, allowLabelsList []string) []generat
 			}),
 		),
 	}
+	if minAge > 0 {
+		// Wrap each generator's GenerateFunc so a single check at the top
+		// short-circuits all kube_job_* emission for short-lived jobs (the
+		// dominant cardinality source under high-churn workloads such as
+		// KEDA ScaledJob).
+		for i := range families {
+			inner := families[i].GenerateFunc
+			families[i].GenerateFunc = func(obj interface{}) *metric.Family {
+				if job, ok := obj.(*v1batch.Job); ok && shouldSuppressJob(job, minAge) {
+					return &metric.Family{}
+				}
+				return inner(obj)
+			}
+		}
+	}
+	return families
+}
+
+// shouldSuppressJob reports whether kube_job_* metrics should be skipped for
+// this job. For terminal jobs (Complete/Failed) the duration between start
+// and completion is used; otherwise the job's age since creation is used.
+// Suppressing terminal jobs that ran shorter than minAge ensures their series
+// never appear in the scrape output, even if they linger in the informer
+// cache after completion.
+func shouldSuppressJob(j *v1batch.Job, minAge time.Duration) bool {
+	if minAge <= 0 {
+		return false
+	}
+	// terminal: derive run duration from StartTime/CompletionTime when both set,
+	// otherwise from the matching condition's LastTransitionTime.
+	for _, c := range j.Status.Conditions {
+		if (c.Type == v1batch.JobComplete || c.Type == v1batch.JobFailed) && c.Status == v1.ConditionTrue {
+			start := j.Status.StartTime
+			end := j.Status.CompletionTime
+			if end == nil {
+				end = &c.LastTransitionTime
+			}
+			if start != nil && end != nil {
+				return end.Sub(start.Time) < minAge
+			}
+			return false
+		}
+	}
+	return time.Since(j.CreationTimestamp.Time) < minAge
 }
 
 func wrapJobFunc(f func(*v1batch.Job) *metric.Family) func(interface{}) *metric.Family {
