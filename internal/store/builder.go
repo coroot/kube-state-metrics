@@ -87,6 +87,7 @@ type Builder struct {
 	shard               int32
 	useAPIServerCache   bool
 	objectLimit         int64
+	podMinAge           time.Duration
 
 	cronJobAPIVersion string // "v1" or "v1beta1", detected at runtime
 
@@ -177,6 +178,13 @@ func (b *Builder) WithUsingAPIServerCache(u bool) {
 // This is to protect kube-state-metrics from running out of memory if the APIServer has a lot of objects.
 func (b *Builder) WithObjectLimit(l int64) {
 	b.objectLimit = l
+}
+
+// WithPodMinAge sets the minimum pod age below which kube_pod_* metrics are suppressed.
+// For terminal-phase pods (Succeeded/Failed) the actual run duration is used instead.
+// 0 disables the filter.
+func (b *Builder) WithPodMinAge(d time.Duration) {
+	b.podMinAge = d
 }
 
 // WithFamilyGeneratorFilter configures the family generator filter which decides which
@@ -497,7 +505,7 @@ func (b *Builder) buildStorageClassStores() []cache.Store {
 }
 
 func (b *Builder) buildPodStores() []cache.Store {
-	return b.buildStoresFunc(podMetricFamilies(b.allowAnnotationsList["pods"], b.allowLabelsList["pods"]), &v1.Pod{}, createPodListWatch, b.useAPIServerCache, b.objectLimit)
+	return b.buildStoresFunc(podMetricFamilies(b.allowAnnotationsList["pods"], b.allowLabelsList["pods"], b.podMinAge), &v1.Pod{}, createPodListWatch, b.useAPIServerCache, b.objectLimit)
 }
 
 func (b *Builder) buildCsrStores() []cache.Store {

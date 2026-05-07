@@ -19,6 +19,7 @@ package store
 import (
 	"context"
 	"strconv"
+	"time"
 
 	basemetrics "k8s.io/component-base/metrics"
 	"k8s.io/utils/net"
@@ -40,8 +41,8 @@ var (
 	podStatusReasons           = []string{"Evicted", "NodeAffinity", "NodeLost", "Shutdown", "UnexpectedAdmissionError"}
 )
 
-func podMetricFamilies(allowAnnotationsList, allowLabelsList []string) []generator.FamilyGenerator {
-	return []generator.FamilyGenerator{
+func podMetricFamilies(allowAnnotationsList, allowLabelsList []string, minAge time.Duration) []generator.FamilyGenerator {
+	families := []generator.FamilyGenerator{
 		createPodCompletionTimeFamilyGenerator(),
 		createPodContainerInfoFamilyGenerator(),
 		createPodContainerResourceLimitsFamilyGenerator(),
@@ -98,6 +99,21 @@ func podMetricFamilies(allowAnnotationsList, allowLabelsList []string) []generat
 		createPodServiceAccountFamilyGenerator(),
 		createPodSchedulerNameFamilyGenerator(),
 	}
+	if minAge > 0 {
+		// Wrap each generator's GenerateFunc so a single check at the top of
+		// the call short-circuits all kube_pod_* emission for short-lived pods,
+		// avoiding the cardinality blowup from high-churn job/cronjob pods.
+		for i := range families {
+			inner := families[i].GenerateFunc
+			families[i].GenerateFunc = func(obj interface{}) *metric.Family {
+				if pod, ok := obj.(*v1.Pod); ok && shouldSuppressPod(pod, minAge) {
+					return &metric.Family{}
+				}
+				return inner(obj)
+			}
+		}
+	}
+	return families
 }
 
 func createPodCompletionTimeFamilyGenerator() generator.FamilyGenerator {
@@ -1816,6 +1832,34 @@ func wrapPodFunc(f func(*v1.Pod) *metric.Family) func(interface{}) *metric.Famil
 		}
 
 		return metricFamily
+	}
+}
+
+// shouldSuppressPod reports whether kube_pod_* metrics should be skipped for
+// this pod. For terminal-phase pods (Succeeded/Failed) the longest container
+// run duration is used; otherwise the pod's age since creation is used.
+// Suppressing terminal pods that lived shorter than minAge ensures their
+// series never appear in the scrape — short-lived job pods get filtered out
+// even after they linger in the informer cache.
+func shouldSuppressPod(pod *v1.Pod, minAge time.Duration) bool {
+	if minAge <= 0 {
+		return false
+	}
+	switch pod.Status.Phase {
+	case v1.PodSucceeded, v1.PodFailed:
+		var d time.Duration
+		for _, cs := range pod.Status.ContainerStatuses {
+			t := cs.State.Terminated
+			if t == nil || t.StartedAt.IsZero() || t.FinishedAt.IsZero() {
+				continue
+			}
+			if x := t.FinishedAt.Sub(t.StartedAt.Time); x > d {
+				d = x
+			}
+		}
+		return d > 0 && d < minAge
+	default:
+		return time.Since(pod.CreationTimestamp.Time) < minAge
 	}
 }
 
