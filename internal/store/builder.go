@@ -650,8 +650,24 @@ func (b *Builder) startReflector(
 	useAPIServerCache bool,
 	objectLimit int64,
 ) {
+	// For Pod/Job stores, MinAge suppression depends on wall-clock time, so
+	// cached metric bytes must be refreshed periodically. Enable object
+	// retention and a non-zero ResyncPeriod so the reflector re-fires the
+	// generator funcs and lets pods/jobs whose lifetime crosses the
+	// threshold start emitting metrics.
+	resync := time.Duration(0)
+	if b.minAge > 0 {
+		switch expectedType.(type) {
+		case *v1.Pod, *batchv1.Job:
+			resync = b.minAge / 2
+			if ms, ok := store.(*metricsstore.MetricsStore); ok {
+				ms.EnableObjectRetention()
+			}
+		}
+	}
+
 	instrumentedListWatch := watch.NewInstrumentedListerWatcher(listWatcher, b.listWatchMetrics, reflect.TypeOf(expectedType).String(), useAPIServerCache, objectLimit)
-	reflector := cache.NewReflectorWithOptions(sharding.NewShardedListWatch(b.shard, b.totalShards, instrumentedListWatch), expectedType, store, cache.ReflectorOptions{ResyncPeriod: 0})
+	reflector := cache.NewReflectorWithOptions(sharding.NewShardedListWatch(b.shard, b.totalShards, instrumentedListWatch), expectedType, store, cache.ReflectorOptions{ResyncPeriod: resync})
 	if cr, ok := expectedType.(*unstructured.Unstructured); ok {
 		go reflector.Run((*b.GVKToReflectorStopChanMap)[cr.GroupVersionKind().String()])
 	} else {

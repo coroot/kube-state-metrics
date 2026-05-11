@@ -41,6 +41,14 @@ type MetricsStore struct {
 	// later on zipped with with their corresponding metric families in
 	// MetricStore.WriteAll().
 	headers []string
+
+	// retainObjects controls whether the source Kubernetes objects are kept
+	// alongside their generated metrics. When enabled, Resync() iterates the
+	// retained objects and re-runs generateMetricsFunc, refreshing cached
+	// bytes. Needed for filters whose decision depends on wall-clock time
+	// (e.g. MinAge) to lift suppression once an object ages past the threshold.
+	retainObjects bool
+	objects       sync.Map
 }
 
 // NewMetricsStore returns a new MetricsStore
@@ -50,6 +58,13 @@ func NewMetricsStore(headers []string, generateFunc func(interface{}) []metric.F
 		headers:             headers,
 		metrics:             sync.Map{},
 	}
+}
+
+// EnableObjectRetention turns on retention of source objects so that Resync()
+// can regenerate cached metrics from the latest wall-clock evaluation of the
+// generator funcs. Must be called before the store is wired into a reflector.
+func (s *MetricsStore) EnableObjectRetention() {
+	s.retainObjects = true
 }
 
 // Implementing k8s.io/client-go/tools/cache.Store interface
@@ -70,6 +85,9 @@ func (s *MetricsStore) Add(obj interface{}) error {
 	}
 
 	s.metrics.Store(o.GetUID(), familyStrings)
+	if s.retainObjects {
+		s.objects.Store(o.GetUID(), obj)
+	}
 
 	return nil
 }
@@ -89,6 +107,9 @@ func (s *MetricsStore) Delete(obj interface{}) error {
 	}
 
 	s.metrics.Delete(o.GetUID())
+	if s.retainObjects {
+		s.objects.Delete(o.GetUID())
+	}
 
 	return nil
 }
@@ -117,6 +138,9 @@ func (s *MetricsStore) GetByKey(_ string) (item interface{}, exists bool, err er
 // given list.
 func (s *MetricsStore) Replace(list []interface{}, _ string) error {
 	s.metrics.Clear()
+	if s.retainObjects {
+		s.objects.Clear()
+	}
 
 	for _, o := range list {
 		err := s.Add(o)
@@ -129,6 +153,16 @@ func (s *MetricsStore) Replace(list []interface{}, _ string) error {
 }
 
 // Resync implements the Resync method of the store interface.
+// When object retention is enabled it re-runs the generator funcs against
+// each retained object, refreshing cached bytes. With retention disabled it
+// is a no-op (matches upstream behavior).
 func (s *MetricsStore) Resync() error {
+	if !s.retainObjects {
+		return nil
+	}
+	s.objects.Range(func(_, obj interface{}) bool {
+		_ = s.Add(obj)
+		return true
+	})
 	return nil
 }
