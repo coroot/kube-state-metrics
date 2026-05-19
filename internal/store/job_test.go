@@ -238,7 +238,7 @@ func TestJobStore(t *testing.T) {
 				kube_job_info{job_name="FailedJobWithNoConditions",namespace="ns1"} 1
 				kube_job_spec_active_deadline_seconds{job_name="FailedJobWithNoConditions",namespace="ns1"} 900
 				kube_job_status_active{job_name="FailedJobWithNoConditions",namespace="ns1"} 0
-				kube_job_status_failed{job_name="FailedJobWithNoConditions",namespace="ns1",reason=""} 1
+				kube_job_status_failed{job_name="FailedJobWithNoConditions",namespace="ns1"} 1
 				kube_job_status_ready{job_name="FailedJobWithNoConditions",namespace="ns1"} 0
 				kube_job_status_succeeded{job_name="FailedJobWithNoConditions",namespace="ns1"} 0
 `,

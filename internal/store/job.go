@@ -240,9 +240,7 @@ func jobMetricFamilies(allowAnnotationsList, allowLabelsList []string, minAge ti
 				// for unknown reasons
 				if !reasonKnown {
 					ms = append(ms, &metric.Metric{
-						LabelKeys:   []string{"reason"},
-						LabelValues: []string{""},
-						Value:       float64(j.Status.Failed),
+						Value: float64(j.Status.Failed),
 					})
 				}
 
