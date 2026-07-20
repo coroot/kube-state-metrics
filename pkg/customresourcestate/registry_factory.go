@@ -735,9 +735,12 @@ func toFloat64(value interface{}, nilIsZero bool) (float64, error) {
 		if normalized == "false" || normalized == "no" || normalized == "unknown" {
 			return 0, nil
 		}
-		// The string contains a RFC3339 timestamp
-		if t, e := time.Parse(time.RFC3339, value.(string)); e == nil {
-			return float64(t.Unix()), nil
+		// The string contains a timestamp: RFC3339, or a common space-separated variant
+		// with a numeric zone offset (e.g. pgBackRest's "2006-01-02 15:04:05.999999-0700").
+		for _, layout := range []string{time.RFC3339, "2006-01-02 15:04:05.999999999-0700", "2006-01-02 15:04:05-0700"} {
+			if t, e := time.Parse(layout, value.(string)); e == nil {
+				return float64(t.Unix()), nil
+			}
 		}
 		// The string contains a quantity with a suffix like "25m" (milli) or "5Gi" (binarySI)
 		if t, e := resource.ParseQuantity(value.(string)); e == nil {
